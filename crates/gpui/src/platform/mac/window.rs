@@ -1008,6 +1008,13 @@ impl PlatformWindow for MacWindow {
         self.0.lock().move_traffic_light();
     }
 
+    fn set_size(&mut self, _size: Size<Pixels>) {
+        unsafe {
+            let _window = self.0.lock().native_window;
+            self.0.lock().move_traffic_light();
+        }
+    }
+
     fn show_character_palette(&self) {
         let this = self.0.lock();
         let window = this.native_window;

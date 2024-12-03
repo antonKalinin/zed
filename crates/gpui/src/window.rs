@@ -1307,8 +1307,8 @@ impl<'a> WindowContext<'a> {
     }
 
     /// Sets window framze size
-    pub fn set_size(&self) {
-        println!("set_size is not implemented yet");
+    pub fn set_size(&mut self, size: Size<Pixels>) {
+        self.window.platform_window.set_size(size);
     }
 
     /// Determine the display on which the window is visible.
