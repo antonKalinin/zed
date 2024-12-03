@@ -1287,6 +1287,10 @@ impl PlatformWindow for X11Window {
         log::info!("ignoring macOS specific set_edited");
     }
 
+    fn set_frame(&self, _bounds: Bounds<Pixels>) {
+        log::info!("ignoring macOS specific set_frame");
+    }
+
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         let mut state = self.0.state.borrow_mut();
         state.background_appearance = background_appearance;
