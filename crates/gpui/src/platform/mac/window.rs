@@ -1016,7 +1016,7 @@ impl PlatformWindow for MacWindow {
                 NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
             );
 
-            let _: () = msg_send![window, setFrame: window_frame];
+            let _: () = msg_send![window, setFrame: window_frame display:false animate:true];
 
             self.0.lock().move_traffic_light();
         }
