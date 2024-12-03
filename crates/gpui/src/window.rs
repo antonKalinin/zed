@@ -1306,6 +1306,11 @@ impl<'a> WindowContext<'a> {
         self.window.platform_window.set_edited(edited);
     }
 
+    /// Sets window framze size
+    pub fn set_size(&self) {
+        println!("set_size is not implemented yet");
+    }
+
     /// Determine the display on which the window is visible.
     pub fn display(&self) -> Option<Rc<dyn PlatformDisplay>> {
         self.platform
