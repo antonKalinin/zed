@@ -1008,18 +1008,21 @@ impl PlatformWindow for MacWindow {
         self.0.lock().move_traffic_light();
     }
 
-    fn set_frame(&mut self, bounds: Bounds<Pixels>) {
-        unsafe {
-            let window = self.0.lock().native_window;
-            let window_frame = NSRect::new(
-                NSPoint::new(bounds.origin.x.0 as f64, bounds.origin.y.0 as f64),
-                NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
-            );
+    fn set_frame(&self, bounds: Bounds<Pixels>) {
+        let this = self.0.lock();
+        let window = this.native_window;
+        this.executor
+            .spawn(async move {
+                unsafe {
+                    let rect = NSRect::new(
+                        NSPoint::new(bounds.origin.x.0 as f64, bounds.origin.y.0 as f64),
+                        NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
+                    );
 
-            let _: () = msg_send![window, setFrame: window_frame display:false animate:true];
-
-            self.0.lock().move_traffic_light();
-        }
+                    window.setFrame_display_animate_(rect, YES, YES);
+                }
+            })
+            .detach();
     }
 
     fn show_character_palette(&self) {

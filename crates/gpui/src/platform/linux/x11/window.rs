@@ -1254,7 +1254,7 @@ impl PlatformWindow for X11Window {
         log::info!("ignoring macOS specific set_edited");
     }
 
-    fn set_frame(&mut self, _bounds: Bounds<Pixels>) {
+    fn set_frame(&self, _bounds: Bounds<Pixels>) {
         log::info!("ignoring macOS specific set_size");
     }
 

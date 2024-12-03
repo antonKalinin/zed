@@ -1307,7 +1307,7 @@ impl<'a> WindowContext<'a> {
     }
 
     /// Sets window frame size
-    pub fn set_frame(&mut self, bounds: Bounds<Pixels>) {
+    pub fn set_frame(&self, bounds: Bounds<Pixels>) {
         self.window.platform_window.set_frame(bounds);
     }
 
