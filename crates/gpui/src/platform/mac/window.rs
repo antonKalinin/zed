@@ -1008,9 +1008,16 @@ impl PlatformWindow for MacWindow {
         self.0.lock().move_traffic_light();
     }
 
-    fn set_size(&mut self, _size: Size<Pixels>) {
+    fn set_frame(&mut self, bounds: Bounds<Pixels>) {
         unsafe {
-            let _window = self.0.lock().native_window;
+            let window = self.0.lock().native_window;
+            let window_frame = NSRect::new(
+                NSPoint::new(bounds.origin.x.0 as f64, bounds.origin.y.0 as f64),
+                NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
+            );
+
+            let _: () = msg_send![window, setFrame: window_frame];
+
             self.0.lock().move_traffic_light();
         }
     }

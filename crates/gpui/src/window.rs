@@ -1306,9 +1306,9 @@ impl<'a> WindowContext<'a> {
         self.window.platform_window.set_edited(edited);
     }
 
-    /// Sets window framze size
-    pub fn set_size(&mut self, size: Size<Pixels>) {
-        self.window.platform_window.set_size(size);
+    /// Sets window frame size
+    pub fn set_frame(&mut self, bounds: Bounds<Pixels>) {
+        self.window.platform_window.set_frame(bounds);
     }
 
     /// Determine the display on which the window is visible.
