@@ -1014,12 +1014,21 @@ impl PlatformWindow for MacWindow {
         this.executor
             .spawn(async move {
                 unsafe {
-                    let rect = NSRect::new(
-                        NSPoint::new(bounds.origin.x.0 as f64, bounds.origin.y.0 as f64),
+                    // TODO: Support multiple displays
+                    let display = MacDisplay::primary();
+                    let screen = NSScreen::mainScreen(nil);
+                    let screen_frame = NSScreen::frame(screen);
+
+                    let window_rect = NSRect::new(
+                        NSPoint::new(
+                            screen_frame.origin.x + bounds.origin.x.0 as f64,
+                            screen_frame.origin.y
+                                + (display.bounds().size.height - bounds.origin.y).0 as f64,
+                        ),
                         NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
                     );
 
-                    window.setFrame_display_animate_(rect, YES, YES);
+                    window.setFrame_display_animate_(window_rect, YES, YES);
                 }
             })
             .detach();
