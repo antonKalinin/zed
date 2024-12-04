@@ -1016,8 +1016,23 @@ impl PlatformWindow for MacWindow {
                 unsafe {
                     // TODO: Support multiple displays
                     let display = MacDisplay::primary();
-                    let screen = NSScreen::mainScreen(nil);
-                    let screen_frame = NSScreen::frame(screen);
+                    let screens = NSScreen::screens(nil);
+                    let count: u64 = cocoa::foundation::NSArray::count(screens);
+                    let mut screen_frame = None;
+
+                    for i in 0..count {
+                        let screen = cocoa::foundation::NSArray::objectAtIndex(screens, i);
+                        let frame = NSScreen::frame(screen);
+                        let display_id = display_id_for_screen(screen);
+                        if display_id == display.0 {
+                            screen_frame = Some(frame);
+                        }
+                    }
+
+                    let screen_frame = screen_frame.unwrap_or_else(|| {
+                        let screen = NSScreen::mainScreen(nil);
+                        NSScreen::frame(screen)
+                    });
 
                     let window_rect = NSRect::new(
                         NSPoint::new(
