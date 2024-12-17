@@ -1,7 +1,7 @@
 use crate::{
     item::{
         ActivateOnClose, ClosePosition, Item, ItemHandle, ItemSettings, PreviewTabsSettings,
-        TabContentParams, WeakItemHandle,
+        ShowDiagnostics, TabContentParams, WeakItemHandle,
     },
     move_item,
     notifications::NotifyResultExt,
@@ -13,16 +13,16 @@ use crate::{
 use anyhow::Result;
 use collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use futures::{stream::FuturesUnordered, StreamExt};
-use git::repository::GitFileStatus;
 use gpui::{
-    actions, anchored, deferred, impl_actions, prelude::*, Action, AnchorCorner, AnyElement,
-    AppContext, AsyncWindowContext, ClickEvent, ClipboardItem, Div, DragMoveEvent, EntityId,
+    actions, anchored, deferred, impl_actions, prelude::*, Action, AnyElement, AppContext,
+    AsyncWindowContext, ClickEvent, ClipboardItem, Corner, Div, DragMoveEvent, EntityId,
     EventEmitter, ExternalPaths, FocusHandle, FocusOutEvent, FocusableView, KeyContext, Model,
     MouseButton, MouseDownEvent, NavigationDirection, Pixels, Point, PromptLevel, Render,
     ScrollHandle, Subscription, Task, View, ViewContext, VisualContext, WeakFocusHandle, WeakView,
     WindowContext,
 };
 use itertools::Itertools;
+use language::DiagnosticSeverity;
 use parking_lot::Mutex;
 use project::{Project, ProjectEntryId, ProjectPath, WorktreeId};
 use serde::Deserialize;
@@ -39,10 +39,10 @@ use std::{
     },
 };
 use theme::ThemeSettings;
-
 use ui::{
-    prelude::*, right_click_menu, ButtonSize, Color, IconButton, IconButtonShape, IconName,
-    IconSize, Indicator, Label, PopoverMenu, PopoverMenuHandle, Tab, TabBar, TabPosition, Tooltip,
+    prelude::*, right_click_menu, ButtonSize, Color, DecoratedIcon, IconButton, IconButtonShape,
+    IconDecoration, IconDecorationKind, IconName, IconSize, Indicator, Label, PopoverMenu,
+    PopoverMenuHandle, Tab, TabBar, TabPosition, Tooltip,
 };
 use ui::{v_flex, ContextMenu};
 use util::{debug_panic, maybe, truncate_and_remove_front, ResultExt};
@@ -305,6 +305,8 @@ pub struct Pane {
     pub new_item_context_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub split_item_context_menu_handle: PopoverMenuHandle<ContextMenu>,
     pinned_tab_count: usize,
+    diagnostics: HashMap<ProjectPath, DiagnosticSeverity>,
+    zoom_out_on_close: bool,
 }
 
 pub struct ActivationHistoryEntry {
@@ -381,6 +383,7 @@ impl Pane {
             cx.on_focus_in(&focus_handle, Pane::focus_in),
             cx.on_focus_out(&focus_handle, Pane::focus_out),
             cx.observe_global::<SettingsStore>(Self::settings_changed),
+            cx.subscribe(&project, Self::project_events),
         ];
 
         let handle = cx.view().downgrade();
@@ -429,7 +432,7 @@ impl Pane {
                                     .icon_size(IconSize::Small)
                                     .tooltip(|cx| Tooltip::text("New...", cx)),
                             )
-                            .anchor(AnchorCorner::TopRight)
+                            .anchor(Corner::TopRight)
                             .with_handle(pane.new_item_context_menu_handle.clone())
                             .menu(move |cx| {
                                 Some(ContextMenu::build(cx, |menu, _| {
@@ -462,7 +465,7 @@ impl Pane {
                                     .icon_size(IconSize::Small)
                                     .tooltip(|cx| Tooltip::text("Split Pane", cx)),
                             )
-                            .anchor(AnchorCorner::TopRight)
+                            .anchor(Corner::TopRight)
                             .with_handle(pane.split_item_context_menu_handle.clone())
                             .menu(move |cx| {
                                 ContextMenu::build(cx, |menu, _| {
@@ -478,7 +481,7 @@ impl Pane {
                         let zoomed = pane.is_zoomed();
                         IconButton::new("toggle_zoom", IconName::Maximize)
                             .icon_size(IconSize::Small)
-                            .selected(zoomed)
+                            .toggle_state(zoomed)
                             .selected_icon(IconName::Minimize)
                             .on_click(cx.listener(|pane, _, cx| {
                                 pane.toggle_zoom(&crate::ToggleZoom, cx);
@@ -504,6 +507,8 @@ impl Pane {
             split_item_context_menu_handle: Default::default(),
             new_item_context_menu_handle: Default::default(),
             pinned_tab_count: 0,
+            diagnostics: Default::default(),
+            zoom_out_on_close: true,
         }
     }
 
@@ -598,6 +603,47 @@ impl Pane {
         cx.notify();
     }
 
+    fn project_events(
+        this: &mut Pane,
+        _project: Model<Project>,
+        event: &project::Event,
+        cx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            project::Event::DiskBasedDiagnosticsFinished { .. }
+            | project::Event::DiagnosticsUpdated { .. } => {
+                if ItemSettings::get_global(cx).show_diagnostics != ShowDiagnostics::Off {
+                    this.update_diagnostics(cx);
+                    cx.notify();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn update_diagnostics(&mut self, cx: &mut ViewContext<Self>) {
+        let show_diagnostics = ItemSettings::get_global(cx).show_diagnostics;
+        self.diagnostics = if show_diagnostics != ShowDiagnostics::Off {
+            self.project
+                .read(cx)
+                .diagnostic_summaries(false, cx)
+                .filter_map(|(project_path, _, diagnostic_summary)| {
+                    if diagnostic_summary.error_count > 0 {
+                        Some((project_path, DiagnosticSeverity::ERROR))
+                    } else if diagnostic_summary.warning_count > 0
+                        && show_diagnostics != ShowDiagnostics::Errors
+                    {
+                        Some((project_path, DiagnosticSeverity::WARNING))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<HashMap<_, _>>()
+        } else {
+            Default::default()
+        }
+    }
+
     fn settings_changed(&mut self, cx: &mut ViewContext<Self>) {
         if let Some(display_nav_history_buttons) = self.display_nav_history_buttons.as_mut() {
             *display_nav_history_buttons = TabBarSettings::get_global(cx).show_nav_history_buttons;
@@ -605,6 +651,7 @@ impl Pane {
         if !PreviewTabsSettings::get_global(cx).enabled {
             self.preview_item_id = None;
         }
+        self.update_diagnostics(cx);
         cx.notify();
     }
 
@@ -849,6 +896,8 @@ impl Pane {
         destination_index: Option<usize>,
         cx: &mut ViewContext<Self>,
     ) {
+        self.close_items_over_max_tabs(cx);
+
         if item.is_singleton(cx) {
             if let Some(&entry_id) = item.project_entry_ids(cx).first() {
                 let project = self.project.read(cx);
@@ -1251,6 +1300,43 @@ impl Pane {
         ))
     }
 
+    pub fn close_items_over_max_tabs(&mut self, cx: &mut ViewContext<Self>) {
+        let Some(max_tabs) = WorkspaceSettings::get_global(cx).max_tabs.map(|i| i.get()) else {
+            return;
+        };
+
+        // Reduce over the activation history to get every dirty items up to max_tabs
+        // count.
+        let mut index_list = Vec::new();
+        let mut items_len = self.items_len();
+        let mut indexes: HashMap<EntityId, usize> = HashMap::default();
+        for (index, item) in self.items.iter().enumerate() {
+            indexes.insert(item.item_id(), index);
+        }
+        for entry in self.activation_history.iter() {
+            if items_len < max_tabs {
+                break;
+            }
+            let Some(&index) = indexes.get(&entry.entity_id) else {
+                continue;
+            };
+            if let Some(true) = self.items.get(index).map(|item| item.is_dirty(cx)) {
+                continue;
+            }
+
+            index_list.push(index);
+            items_len -= 1;
+        }
+        // The sort and reverse is necessary since we remove items
+        // using their index position, hence removing from the end
+        // of the list first to avoid changing indexes.
+        index_list.sort_unstable();
+        index_list
+            .iter()
+            .rev()
+            .for_each(|&index| self._remove_item(index, false, false, None, cx));
+    }
+
     pub(super) fn file_names_for_prompt(
         items: &mut dyn Iterator<Item = &Box<dyn ItemHandle>>,
         all_dirty_items: usize,
@@ -1382,7 +1468,7 @@ impl Pane {
                     // Always propose to save singleton files without any project paths: those cannot be saved via multibuffer, as require a file path selection modal.
                     || cx
                         .update(|cx| {
-                            item_to_close.is_dirty(cx)
+                            item_to_close.can_save(cx) && item_to_close.is_dirty(cx)
                                 && item_to_close.is_singleton(cx)
                                 && item_to_close.project_path(cx).is_none()
                         })
@@ -1459,6 +1545,7 @@ impl Pane {
             self.pinned_tab_count -= 1;
         }
         if item_index == self.active_item_index {
+            let left_neighbour_index = || item_index.min(self.items.len()).saturating_sub(1);
             let index_to_activate = match activate_on_close {
                 ActivateOnClose::History => self
                     .activation_history
@@ -1470,7 +1557,7 @@ impl Pane {
                     })
                     // We didn't have a valid activation history entry, so fallback
                     // to activating the item to the left
-                    .unwrap_or_else(|| item_index.min(self.items.len()).saturating_sub(1)),
+                    .unwrap_or_else(left_neighbour_index),
                 ActivateOnClose::Neighbour => {
                     self.activation_history.pop();
                     if item_index + 1 < self.items.len() {
@@ -1478,6 +1565,10 @@ impl Pane {
                     } else {
                         item_index.saturating_sub(1)
                     }
+                }
+                ActivateOnClose::LeftNeighbour => {
+                    self.activation_history.pop();
+                    left_neighbour_index()
                 }
             };
 
@@ -1541,7 +1632,7 @@ impl Pane {
                 .remove(&item.item_id());
         }
 
-        if self.items.is_empty() && close_pane_if_empty && self.zoomed {
+        if self.zoom_out_on_close && self.items.is_empty() && close_pane_if_empty && self.zoomed {
             cx.emit(Event::ZoomOut);
         }
 
@@ -1839,23 +1930,6 @@ impl Pane {
         }
     }
 
-    pub fn git_aware_icon_color(
-        git_status: Option<GitFileStatus>,
-        ignored: bool,
-        selected: bool,
-    ) -> Color {
-        if ignored {
-            Color::Ignored
-        } else {
-            match git_status {
-                Some(GitFileStatus::Added) => Color::Created,
-                Some(GitFileStatus::Modified) => Color::Modified,
-                Some(GitFileStatus::Conflict) => Color::Conflict,
-                None => Self::icon_color(selected),
-            }
-        }
-    }
-
     fn toggle_pin_tab(&mut self, _: &TogglePinTab, cx: &mut ViewContext<'_, Self>) {
         if self.items.is_empty() {
             return;
@@ -1919,8 +1993,6 @@ impl Pane {
         focus_handle: &FocusHandle,
         cx: &mut ViewContext<'_, Pane>,
     ) -> impl IntoElement {
-        let project_path = item.project_path(cx);
-
         let is_active = ix == self.active_item_index;
         let is_preview = self
             .preview_item_id
@@ -1936,19 +2008,53 @@ impl Pane {
             cx,
         );
 
-        let icon_color = if ItemSettings::get_global(cx).git_status {
-            project_path
-                .as_ref()
-                .and_then(|path| self.project.read(cx).entry_for_path(path, cx))
-                .map(|entry| {
-                    Self::git_aware_icon_color(entry.git_status, entry.is_ignored, is_active)
-                })
-                .unwrap_or_else(|| Self::icon_color(is_active))
+        let item_diagnostic = item
+            .project_path(cx)
+            .map_or(None, |project_path| self.diagnostics.get(&project_path));
+
+        let decorated_icon = item_diagnostic.map_or(None, |diagnostic| {
+            let icon = match item.tab_icon(cx) {
+                Some(icon) => icon,
+                None => return None,
+            };
+
+            let knockout_item_color = if is_active {
+                cx.theme().colors().tab_active_background
+            } else {
+                cx.theme().colors().tab_bar_background
+            };
+
+            let (icon_decoration, icon_color) = if matches!(diagnostic, &DiagnosticSeverity::ERROR)
+            {
+                (IconDecorationKind::X, Color::Error)
+            } else {
+                (IconDecorationKind::Triangle, Color::Warning)
+            };
+
+            Some(DecoratedIcon::new(
+                icon.size(IconSize::Small).color(Color::Muted),
+                Some(
+                    IconDecoration::new(icon_decoration, knockout_item_color, cx)
+                        .color(icon_color.color(cx))
+                        .position(Point {
+                            x: px(-2.),
+                            y: px(-2.),
+                        }),
+                ),
+            ))
+        });
+
+        let icon = if decorated_icon.is_none() {
+            match item_diagnostic {
+                Some(&DiagnosticSeverity::ERROR) => None,
+                Some(&DiagnosticSeverity::WARNING) => None,
+                _ => item.tab_icon(cx).map(|icon| icon.color(Color::Muted)),
+            }
+            .map(|icon| icon.size(IconSize::Small))
         } else {
-            Self::icon_color(is_active)
+            None
         };
 
-        let icon = item.tab_icon(cx);
         let settings = ItemSettings::get_global(cx);
         let close_side = &settings.close_position;
         let always_show_close_button = settings.always_show_close_button;
@@ -1971,7 +2077,7 @@ impl Pane {
                 ClosePosition::Left => ui::TabCloseSide::Start,
                 ClosePosition::Right => ui::TabCloseSide::End,
             })
-            .selected(is_active)
+            .toggle_state(is_active)
             .on_click(
                 cx.listener(move |pane: &mut Self, _, cx| pane.activate_item(ix, true, true, cx)),
             )
@@ -2078,7 +2184,17 @@ impl Pane {
             .child(
                 h_flex()
                     .gap_1()
-                    .children(icon.map(|icon| icon.size(IconSize::Small).color(icon_color)))
+                    .items_center()
+                    .children(
+                        std::iter::once(if let Some(decorated_icon) = decorated_icon {
+                            Some(div().child(decorated_icon.into_any_element()))
+                        } else if let Some(icon) = icon {
+                            Some(div().child(icon.into_any_element()))
+                        } else {
+                            None
+                        })
+                        .flatten(),
+                    )
                     .child(label),
             );
 
@@ -2390,12 +2506,7 @@ impl Pane {
 
     pub fn render_menu_overlay(menu: &View<ContextMenu>) -> Div {
         div().absolute().bottom_0().right_0().size_0().child(
-            deferred(
-                anchored()
-                    .anchor(AnchorCorner::TopRight)
-                    .child(menu.clone()),
-            )
-            .with_priority(1),
+            deferred(anchored().anchor(Corner::TopRight).child(menu.clone())).with_priority(1),
         )
     }
 
@@ -2716,6 +2827,10 @@ impl Pane {
 
     pub fn drag_split_direction(&self) -> Option<SplitDirection> {
         self.drag_split_direction
+    }
+
+    pub fn set_zoom_out_on_close(&mut self, zoom_out_on_close: bool) {
+        self.zoom_out_on_close = zoom_out_on_close;
     }
 }
 
@@ -3192,7 +3307,7 @@ impl Render for DraggedTab {
             cx,
         );
         Tab::new("")
-            .selected(self.is_active)
+            .toggle_state(self.is_active)
             .child(label)
             .render(cx)
             .font(ui_font)
@@ -3201,6 +3316,8 @@ impl Render for DraggedTab {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use super::*;
     use crate::item::test::{TestItem, TestProjectItem};
     use gpui::{TestAppContext, VisualTestContext};
@@ -3222,6 +3339,54 @@ mod tests {
                 .close_active_item(&CloseActiveItem { save_intent: None }, cx)
                 .is_none())
         });
+    }
+
+    #[gpui::test]
+    async fn test_add_item_capped_to_max_tabs(cx: &mut TestAppContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) = cx.add_window_view(|cx| Workspace::test_new(project.clone(), cx));
+        let pane = workspace.update(cx, |workspace, _| workspace.active_pane().clone());
+
+        for i in 0..7 {
+            add_labeled_item(&pane, format!("{}", i).as_str(), false, cx);
+        }
+        set_max_tabs(cx, Some(5));
+        add_labeled_item(&pane, "7", false, cx);
+        // Remove items to respect the max tab cap.
+        assert_item_labels(&pane, ["3", "4", "5", "6", "7*"], cx);
+        pane.update(cx, |pane, cx| {
+            pane.activate_item(0, false, false, cx);
+        });
+        add_labeled_item(&pane, "X", false, cx);
+        // Respect activation order.
+        assert_item_labels(&pane, ["3", "X*", "5", "6", "7"], cx);
+
+        for i in 0..7 {
+            add_labeled_item(&pane, format!("D{}", i).as_str(), true, cx);
+        }
+        // Keeps dirty items, even over max tab cap.
+        assert_item_labels(
+            &pane,
+            ["D0^", "D1^", "D2^", "D3^", "D4^", "D5^", "D6*^"],
+            cx,
+        );
+
+        set_max_tabs(cx, None);
+        for i in 0..7 {
+            add_labeled_item(&pane, format!("N{}", i).as_str(), false, cx);
+        }
+        // No cap when max tabs is None.
+        assert_item_labels(
+            &pane,
+            [
+                "D0^", "D1^", "D2^", "D3^", "D4^", "D5^", "D6^", "N0", "N1", "N2", "N3", "N4",
+                "N5", "N6*",
+            ],
+            cx,
+        );
     }
 
     #[gpui::test]
@@ -3591,6 +3756,69 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_remove_item_ordering_left_neighbour(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update_global::<SettingsStore, ()>(|s, cx| {
+            s.update_user_settings::<ItemSettings>(cx, |s| {
+                s.activate_on_close = Some(ActivateOnClose::LeftNeighbour);
+            });
+        });
+        let fs = FakeFs::new(cx.executor());
+
+        let project = Project::test(fs, None, cx).await;
+        let (workspace, cx) = cx.add_window_view(|cx| Workspace::test_new(project.clone(), cx));
+        let pane = workspace.update(cx, |workspace, _| workspace.active_pane().clone());
+
+        add_labeled_item(&pane, "A", false, cx);
+        add_labeled_item(&pane, "B", false, cx);
+        add_labeled_item(&pane, "C", false, cx);
+        add_labeled_item(&pane, "D", false, cx);
+        assert_item_labels(&pane, ["A", "B", "C", "D*"], cx);
+
+        pane.update(cx, |pane, cx| pane.activate_item(1, false, false, cx));
+        add_labeled_item(&pane, "1", false, cx);
+        assert_item_labels(&pane, ["A", "B", "1*", "C", "D"], cx);
+
+        pane.update(cx, |pane, cx| {
+            pane.close_active_item(&CloseActiveItem { save_intent: None }, cx)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+        assert_item_labels(&pane, ["A", "B*", "C", "D"], cx);
+
+        pane.update(cx, |pane, cx| pane.activate_item(3, false, false, cx));
+        assert_item_labels(&pane, ["A", "B", "C", "D*"], cx);
+
+        pane.update(cx, |pane, cx| {
+            pane.close_active_item(&CloseActiveItem { save_intent: None }, cx)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+        assert_item_labels(&pane, ["A", "B", "C*"], cx);
+
+        pane.update(cx, |pane, cx| pane.activate_item(0, false, false, cx));
+        assert_item_labels(&pane, ["A*", "B", "C"], cx);
+
+        pane.update(cx, |pane, cx| {
+            pane.close_active_item(&CloseActiveItem { save_intent: None }, cx)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+        assert_item_labels(&pane, ["B*", "C"], cx);
+
+        pane.update(cx, |pane, cx| {
+            pane.close_active_item(&CloseActiveItem { save_intent: None }, cx)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+        assert_item_labels(&pane, ["C*"], cx);
+    }
+
+    #[gpui::test]
     async fn test_close_inactive_items(cx: &mut TestAppContext) {
         init_test(cx);
         let fs = FakeFs::new(cx.executor());
@@ -3792,11 +4020,8 @@ mod tests {
 
         cx.executor().run_until_parked();
         cx.simulate_prompt_answer(2);
-        cx.executor().run_until_parked();
-        cx.simulate_prompt_answer(2);
-        cx.executor().run_until_parked();
         save.await.unwrap();
-        assert_item_labels(&pane, ["A*^", "B^", "C^"], cx);
+        assert_item_labels(&pane, [], cx);
     }
 
     #[gpui::test]
@@ -3837,6 +4062,14 @@ mod tests {
             theme::init(LoadThemes::JustBase, cx);
             crate::init_settings(cx);
             Project::init_settings(cx);
+        });
+    }
+
+    fn set_max_tabs(cx: &mut TestAppContext, value: Option<usize>) {
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            store.update_user_settings::<WorkspaceSettings>(cx, |settings| {
+                settings.max_tabs = value.map(|v| NonZero::new(v).unwrap())
+            });
         });
     }
 
