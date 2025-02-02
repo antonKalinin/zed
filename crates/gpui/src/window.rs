@@ -1428,9 +1428,9 @@ impl Window {
         self.platform_window.set_edited(edited);
     }
 
-    /// Sets window frame size
+    /// Sets window frame size.
     pub fn set_frame(&self, bounds: Bounds<Pixels>) {
-        self.window.platform_window.set_frame(bounds);
+        self.platform_window.set_frame(bounds);
     }
 
     /// Determine the display on which the window is visible.
