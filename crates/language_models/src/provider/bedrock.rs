@@ -3,23 +3,20 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::ui::InstructionListItem;
-use anyhow::{anyhow, Context as _, Result};
-use aws_config::stalled_stream_protection::StalledStreamProtectionConfig;
+use anyhow::{Context as _, Result, anyhow};
 use aws_config::Region;
+use aws_config::stalled_stream_protection::StalledStreamProtectionConfig;
 use aws_credential_types::Credentials;
 use aws_http_client::AwsHttpClient;
 use bedrock::bedrock_client::types::{
     ContentBlockDelta, ContentBlockStart, ContentBlockStartEvent, ConverseStreamOutput,
 };
 use bedrock::bedrock_client::{self, Config};
-use bedrock::{
-    value_to_aws_document, BedrockError, BedrockInnerContent, BedrockMessage, BedrockSpecificTool,
-    BedrockStreamingResponse, BedrockTool, BedrockToolChoice, BedrockToolInputSchema, Model,
-};
+use bedrock::{BedrockError, BedrockInnerContent, BedrockMessage, BedrockStreamingResponse, Model};
 use collections::{BTreeMap, HashMap};
 use credentials_provider::CredentialsProvider;
 use editor::{Editor, EditorElement, EditorStyle};
-use futures::{future::BoxFuture, stream::BoxStream, FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, future::BoxFuture, stream::BoxStream};
 use gpui::{
     AnyView, App, AsyncApp, Context, Entity, FontStyle, Subscription, Task, TextStyle, WhiteSpace,
 };
@@ -38,8 +35,8 @@ use settings::{Settings, SettingsStore};
 use strum::IntoEnumIterator;
 use theme::ThemeSettings;
 use tokio::runtime::Handle;
-use ui::{prelude::*, Icon, IconName, List, Tooltip};
-use util::{maybe, ResultExt};
+use ui::{Icon, IconName, List, Tooltip, prelude::*};
+use util::{ResultExt, maybe};
 
 use crate::AllLanguageModelSettings;
 
@@ -90,12 +87,12 @@ pub struct State {
 impl State {
     fn reset_credentials(&self, cx: &mut Context<Self>) -> Task<Result<()>> {
         let credentials_provider = <dyn CredentialsProvider>::global(cx);
-        cx.spawn(|this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             credentials_provider
                 .delete_credentials(AMAZON_AWS_URL, &cx)
                 .await
                 .log_err();
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.credentials = None;
                 this.credentials_from_env = false;
                 cx.notify();
@@ -109,7 +106,7 @@ impl State {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         let credentials_provider = <dyn CredentialsProvider>::global(cx);
-        cx.spawn(|this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             credentials_provider
                 .write_credentials(
                     AMAZON_AWS_URL,
@@ -118,7 +115,7 @@ impl State {
                     &cx,
                 )
                 .await?;
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.credentials = Some(credentials);
                 cx.notify();
             })
@@ -135,7 +132,7 @@ impl State {
         }
 
         let credentials_provider = <dyn CredentialsProvider>::global(cx);
-        cx.spawn(|this, mut cx| async move {
+        cx.spawn(async move |this, cx| {
             let (credentials, from_env) =
                 if let Ok(credentials) = std::env::var(ZED_AWS_CREDENTIALS_VAR) {
                     (credentials, true)
@@ -154,7 +151,7 @@ impl State {
             let credentials: BedrockCredentials =
                 serde_json::from_str(&credentials).context("failed to parse credentials")?;
 
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.credentials = Some(credentials);
                 this.credentials_from_env = from_env;
                 cx.notify();
@@ -364,6 +361,10 @@ impl LanguageModel for BedrockModel {
         LanguageModelProviderName(PROVIDER_NAME.into())
     }
 
+    fn supports_tools(&self) -> bool {
+        true
+    }
+
     fn telemetry_id(&self) -> String {
         format!("bedrock/{}", self.model.id())
     }
@@ -407,50 +408,6 @@ impl LanguageModel for BedrockModel {
             ))
         });
         async move { Ok(future.await?.boxed()) }.boxed()
-    }
-
-    fn use_any_tool(
-        &self,
-        request: LanguageModelRequest,
-        name: String,
-        description: String,
-        schema: Value,
-        _cx: &AsyncApp,
-    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<String>>>> {
-        let mut request = into_bedrock(
-            request,
-            self.model.id().into(),
-            self.model.default_temperature(),
-            self.model.max_output_tokens(),
-        );
-
-        request.tool_choice = BedrockSpecificTool::builder()
-            .name(name.clone())
-            .build()
-            .log_err()
-            .map(BedrockToolChoice::Tool);
-
-        if let Some(tool) = BedrockTool::builder()
-            .name(name.clone())
-            .description(description.clone())
-            .input_schema(BedrockToolInputSchema::Json(value_to_aws_document(&schema)))
-            .build()
-            .log_err()
-        {
-            request.tools.push(tool);
-        }
-
-        let handle = self.handler.clone();
-
-        let request = self.stream_completion(request, _cx);
-        self.request_limiter
-            .run(async move {
-                let response = request.map_err(|err| anyhow!(err))?.await;
-                Ok(extract_tool_args_from_events(name, response, handle)
-                    .await?
-                    .boxed())
-            })
-            .boxed()
     }
 
     fn cache_configuration(&self) -> Option<LanguageModelCacheConfiguration> {
@@ -789,15 +746,15 @@ impl ConfigurationView {
 
         let load_credentials_task = Some(cx.spawn({
             let state = state.clone();
-            |this, mut cx| async move {
+            async move |this, cx| {
                 if let Some(task) = state
-                    .update(&mut cx, |state, cx| state.authenticate(cx))
+                    .update(cx, |state, cx| state.authenticate(cx))
                     .log_err()
                 {
                     // We don't log an error, because "not signed in" is also an error.
                     let _ = task.await;
                 }
-                this.update(&mut cx, |this, cx| {
+                this.update(cx, |this, cx| {
                     this.load_credentials_task = None;
                     cx.notify();
                 })
@@ -855,9 +812,9 @@ impl ConfigurationView {
             .to_string();
 
         let state = self.state.clone();
-        cx.spawn(|_, mut cx| async move {
+        cx.spawn(async move |_, cx| {
             state
-                .update(&mut cx, |state, cx| {
+                .update(cx, |state, cx| {
                     let credentials: BedrockCredentials = BedrockCredentials {
                         access_key_id: access_key_id.clone(),
                         secret_access_key: secret_access_key.clone(),
@@ -880,9 +837,9 @@ impl ConfigurationView {
             .update(cx, |editor, cx| editor.set_text("", window, cx));
 
         let state = self.state.clone();
-        cx.spawn(|_, mut cx| async move {
+        cx.spawn(async move |_, cx| {
             state
-                .update(&mut cx, |state, cx| state.reset_credentials(cx))?
+                .update(cx, |state, cx| state.reset_credentials(cx))?
                 .await
         })
         .detach_and_log_err(cx);

@@ -1,10 +1,10 @@
 use crate::{
-    h_flex, prelude::*, utils::WithRemSize, v_flex, Icon, IconName, IconSize, KeyBinding, Label,
-    List, ListItem, ListSeparator, ListSubHeader,
+    Icon, IconName, IconSize, KeyBinding, Label, List, ListItem, ListSeparator, ListSubHeader,
+    h_flex, prelude::*, utils::WithRemSize, v_flex,
 };
 use gpui::{
-    px, Action, AnyElement, App, AppContext as _, DismissEvent, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, Render, Subscription,
+    Action, AnyElement, App, AppContext as _, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, Render, Subscription, px,
 };
 use menu::{SelectFirst, SelectLast, SelectNext, SelectPrevious};
 use settings::Settings;
@@ -557,7 +557,7 @@ impl ContextMenu {
             self.delayed = true;
             cx.notify();
             let action = dispatched.boxed_clone();
-            cx.spawn_in(window, |this, mut cx| async move {
+            cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
                     .await;
@@ -585,7 +585,7 @@ impl ContextMenu {
         item: &ContextMenuItem,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         match item {
             ContextMenuItem::Separator => ListSeparator.into_any_element(),
             ContextMenuItem::Header(header) => ListSubHeader::new(header.clone())
@@ -752,7 +752,7 @@ impl ContextMenu {
                                         KeyBinding::for_action(&**action, window, cx)
                                     })
                                     .map(|binding| {
-                                        div().ml_4().child(binding).when(
+                                        div().ml_4().child(binding.disabled(*disabled)).when(
                                             *disabled && documentation_aside_callback.is_some(),
                                             |parent| parent.invisible(),
                                         )

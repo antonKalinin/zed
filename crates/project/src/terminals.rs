@@ -1,4 +1,4 @@
-use crate::Project;
+use crate::{Project, ProjectPath};
 use anyhow::{Context as _, Result};
 use collections::HashMap;
 use gpui::{AnyWindowHandle, App, AppContext as _, Context, Entity, Task, WeakEntity};
@@ -15,8 +15,8 @@ use std::{
 };
 use task::{Shell, ShellBuilder, SpawnInTerminal};
 use terminal::{
-    terminal_settings::{self, TerminalSettings, VenvSettings},
     TaskState, TaskStatus, Terminal, TerminalBuilder,
+    terminal_settings::{self, TerminalSettings, VenvSettings},
 };
 use util::ResultExt;
 
@@ -115,17 +115,17 @@ impl Project {
         }
         let settings = TerminalSettings::get(settings_location, cx).clone();
 
-        cx.spawn(move |project, mut cx| async move {
+        cx.spawn(async move |project, cx| {
             let python_venv_directory = if let Some(path) = path.clone() {
                 project
-                    .update(&mut cx, |this, cx| {
+                    .update(cx, |this, cx| {
                         this.python_venv_directory(path, settings.detect_venv.clone(), cx)
                     })?
                     .await
             } else {
                 None
             };
-            project.update(&mut cx, |project, cx| {
+            project.update(cx, |project, cx| {
                 project.create_terminal_with_venv(kind, python_venv_directory, window, cx)
             })?
         })
@@ -406,15 +406,18 @@ impl Project {
         venv_settings: VenvSettings,
         cx: &Context<Project>,
     ) -> Task<Option<PathBuf>> {
-        cx.spawn(move |this, mut cx| async move {
-            if let Some((worktree, _)) = this
-                .update(&mut cx, |this, cx| this.find_worktree(&abs_path, cx))
+        cx.spawn(async move |this, cx| {
+            if let Some((worktree, relative_path)) = this
+                .update(cx, |this, cx| this.find_worktree(&abs_path, cx))
                 .ok()?
             {
                 let toolchain = this
-                    .update(&mut cx, |this, cx| {
+                    .update(cx, |this, cx| {
                         this.active_toolchain(
-                            worktree.read(cx).id(),
+                            ProjectPath {
+                                worktree_id: worktree.read(cx).id(),
+                                path: relative_path.into(),
+                            },
                             LanguageName::new("Python"),
                             cx,
                         )
@@ -428,7 +431,7 @@ impl Project {
                 }
             }
             let venv_settings = venv_settings.as_option()?;
-            this.update(&mut cx, move |this, cx| {
+            this.update(cx, move |this, cx| {
                 if let Some(path) = this.find_venv_in_worktree(&abs_path, &venv_settings, cx) {
                     return Some(path);
                 }

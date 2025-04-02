@@ -4,9 +4,9 @@ use anyhow::Result;
 use gpui::{FontStyle, FontWeight, HighlightStyle, Hsla, WindowBackgroundAppearance};
 use indexmap::IndexMap;
 use palette::FromColor;
-use schemars::gen::SchemaGenerator;
-use schemars::schema::{Schema, SchemaObject};
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{Schema, SchemaObject};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_repr::{Deserialize_repr, Serialize_repr};
@@ -98,7 +98,8 @@ impl ThemeStyleContent {
     /// Returns a [`ThemeColorsRefinement`] based on the colors in the [`ThemeContent`].
     #[inline(always)]
     pub fn theme_colors_refinement(&self) -> ThemeColorsRefinement {
-        self.colors.theme_colors_refinement()
+        self.colors
+            .theme_colors_refinement(&self.status_colors_refinement())
     }
 
     /// Returns a [`StatusColorsRefinement`] based on the colors in the [`ThemeContent`].
@@ -589,7 +590,10 @@ pub struct ThemeColorsContent {
 
 impl ThemeColorsContent {
     /// Returns a [`ThemeColorsRefinement`] based on the colors in the [`ThemeColorsContent`].
-    pub fn theme_colors_refinement(&self) -> ThemeColorsRefinement {
+    pub fn theme_colors_refinement(
+        &self,
+        status_colors: &StatusColorsRefinement,
+    ) -> ThemeColorsRefinement {
         let border = self
             .border
             .as_ref()
@@ -1000,27 +1004,39 @@ impl ThemeColorsContent {
             version_control_added: self
                 .version_control_added
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `created`, for backwards compatibility.
+                .or(status_colors.created),
             version_control_deleted: self
                 .version_control_deleted
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `deleted`, for backwards compatibility.
+                .or(status_colors.deleted),
             version_control_modified: self
                 .version_control_modified
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `modified`, for backwards compatibility.
+                .or(status_colors.modified),
             version_control_renamed: self
                 .version_control_renamed
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `modified`, for backwards compatibility.
+                .or(status_colors.modified),
             version_control_conflict: self
                 .version_control_conflict
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `ignored`, for backwards compatibility.
+                .or(status_colors.ignored),
             version_control_ignored: self
                 .version_control_ignored
                 .as_ref()
-                .and_then(|color| try_parse_color(color).ok()),
+                .and_then(|color| try_parse_color(color).ok())
+                // Fall back to `conflict`, for backwards compatibility.
+                .or(status_colors.ignored),
         }
     }
 }

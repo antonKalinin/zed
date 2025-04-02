@@ -5,14 +5,14 @@ use super::{
 use anyhow::Result;
 use collections::HashMap;
 use dap::OutputEvent;
-use editor::{CompletionProvider, Editor, EditorElement, EditorStyle};
+use editor::{CompletionProvider, Editor, EditorElement, EditorStyle, ExcerptId};
 use fuzzy::StringMatchCandidate;
 use gpui::{Context, Entity, Render, Subscription, Task, TextStyle, WeakEntity};
 use language::{Buffer, CodeLabel};
 use menu::Confirm;
 use project::{
-    debugger::session::{CompletionsQuery, OutputToken, Session},
     Completion,
+    debugger::session::{CompletionsQuery, OutputToken, Session},
 };
 use settings::Settings;
 use std::{cell::RefCell, rc::Rc, usize};
@@ -213,8 +213,8 @@ impl Render for Console {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let session = self.session.clone();
         let token = self.last_token;
-        self.update_output_task = cx.spawn_in(window, move |this, mut cx| async move {
-            _ = session.update_in(&mut cx, move |session, window, cx| {
+        self.update_output_task = cx.spawn_in(window, async move |this, cx| {
+            _ = session.update_in(cx, move |session, window, cx| {
                 let (output, last_processed_token) = session.output(token);
 
                 _ = this.update(cx, |this, cx| {
@@ -246,6 +246,7 @@ struct ConsoleQueryBarCompletionProvider(WeakEntity<Console>);
 impl CompletionProvider for ConsoleQueryBarCompletionProvider {
     fn completions(
         &self,
+        _excerpt_id: ExcerptId,
         buffer: &Entity<Buffer>,
         buffer_position: language::Anchor,
         _trigger: editor::CompletionContext,
@@ -342,7 +343,7 @@ impl ConsoleQueryBarCompletionProvider {
 
         let query = buffer.read(cx).text();
 
-        cx.spawn(|_, cx| async move {
+        cx.spawn(async move |_, cx| {
             let matches = fuzzy::match_strings(
                 &string_matches,
                 &query,
@@ -367,6 +368,7 @@ impl ConsoleQueryBarCompletionProvider {
                                 text: format!("{} {}", string_match.string.clone(), variable_value),
                                 runs: Vec::new(),
                             },
+                            icon_path: None,
                             documentation: None,
                             confirm: None,
                             source: project::CompletionSource::Custom,
@@ -408,6 +410,7 @@ impl ConsoleQueryBarCompletionProvider {
                             text: completion.label.clone(),
                             runs: Vec::new(),
                         },
+                        icon_path: None,
                         documentation: None,
                         confirm: None,
                         source: project::CompletionSource::Custom,
