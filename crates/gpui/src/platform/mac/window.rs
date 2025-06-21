@@ -1071,6 +1071,52 @@ impl PlatformWindow for MacWindow {
         self.0.lock().move_traffic_light();
     }
 
+    fn set_frame(&self, bounds: Bounds<Pixels>, animate: bool) {
+        let this = self.0.lock();
+        let window = this.native_window;
+        this.executor
+            .spawn(async move {
+                unsafe {
+                    // TODO: Support multiple displays
+                    let display = MacDisplay::primary();
+                    let screens = NSScreen::screens(nil);
+                    let count: u64 = cocoa::foundation::NSArray::count(screens);
+                    let mut screen_ = None;
+                    let mut screen_frame = None;
+
+                    for i in 0..count {
+                        let screen = cocoa::foundation::NSArray::objectAtIndex(screens, i);
+                        let frame = NSScreen::frame(screen);
+                        let display_id = display_id_for_screen(screen);
+                        if display_id == display.0 {
+                            screen_ = Some(screen);
+                            screen_frame = Some(frame);
+                        }
+                    }
+
+                    let screen_frame = screen_frame.unwrap_or_else(|| {
+                        let screen = NSScreen::mainScreen(nil);
+                        screen_ = Some(screen);
+                        NSScreen::frame(screen)
+                    });
+
+                    let window_rect = NSRect::new(
+                        NSPoint::new(
+                            screen_frame.origin.x + bounds.origin.x.0 as f64,
+                            screen_frame.origin.y
+                                + (display.bounds().size.height - bounds.origin.y).0 as f64,
+                        ),
+                        NSSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64),
+                    );
+
+                    let animate = if animate { YES } else { NO };
+
+                    window.setFrame_display_animate_(window_rect, YES, animate);
+                }
+            })
+            .detach();
+    }
+
     fn show_character_palette(&self) {
         let this = self.0.lock();
         let window = this.native_window;

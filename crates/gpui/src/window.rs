@@ -1615,6 +1615,11 @@ impl Window {
         self.platform_window.set_edited(edited);
     }
 
+    /// Sets window frame size.
+    pub fn set_frame(&self, bounds: Bounds<Pixels>, animate: bool) {
+        self.platform_window.set_frame(bounds, animate);
+    }
+
     /// Determine the display on which the window is visible.
     pub fn display(&self, cx: &App) -> Option<Rc<dyn PlatformDisplay>> {
         cx.platform
