@@ -83,9 +83,13 @@ pub fn os_name() -> String {
     {
         "macOS".to_string()
     }
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[cfg(target_os = "linux")]
     {
         format!("Linux {}", gpui::guess_compositor())
+    }
+    #[cfg(target_os = "freebsd")]
+    {
+        format!("FreeBSD {}", gpui::guess_compositor())
     }
 
     #[cfg(target_os = "windows")]
@@ -120,8 +124,12 @@ pub fn os_version() -> String {
             file
         } else if let Ok(file) = std::fs::read_to_string(&Path::new("/usr/lib/os-release")) {
             file
+        } else if let Ok(file) = std::fs::read_to_string(&Path::new("/var/run/os-release")) {
+            file
         } else {
-            log::error!("Failed to load /etc/os-release, /usr/lib/os-release");
+            log::error!(
+                "Failed to load /etc/os-release, /usr/lib/os-release, or /var/run/os-release"
+            );
             "".to_string()
         };
         let mut name = "unknown";
@@ -350,13 +358,13 @@ impl Telemetry {
         worktree_id: WorktreeId,
         updated_entries_set: &UpdatedEntriesSet,
     ) {
-        let Some(project_type_names) = self.detect_project_types(worktree_id, updated_entries_set)
+        let Some(project_types) = self.detect_project_types(worktree_id, updated_entries_set)
         else {
             return;
         };
 
-        for project_type_name in project_type_names {
-            telemetry::event!("Project Opened", project_type = project_type_name);
+        for project_type in project_types {
+            telemetry::event!("Project Opened", project_type = project_type);
         }
     }
 
